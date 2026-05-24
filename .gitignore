@@ -1,0 +1,9 @@
+/.vscode
+/build
+/full_graph.dot
+/graph_all_stops.dot
+/graph_all_stops.svg
+/graph_sample.dot
+/graph_sample.svg
+/Prompt.txt
+/README.md

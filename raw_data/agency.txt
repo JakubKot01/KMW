@@ -1,0 +1,6 @@
+"agency_id","agency_name","agency_url","agency_timezone","agency_lang","agency_phone","agency_fare_url","agency_email"
+"452-2","MPK Autobusy","http://www.mpk.wroc.pl","Europe/Warsaw","pl","71 308 50 30","",""
+"452-3","MPK Tramwaje","http://www.mpk.wroc.pl","Europe/Warsaw","pl","71 308 50 30","",""
+"452-27","Nowak Transport","https://nowaktransport-konsorcjum.pl/","Europe/Warsaw","pl","788-146-457","",""
+"452-28","PT Kłosok","http://www.klosok.eu","Europe/Warsaw","pl","792 700 440","",""
+"452-29","DLA Wrocław","http://www.dla.com.pl","Europe/Warsaw","pl","71 782 81 31","",""
