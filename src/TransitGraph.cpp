@@ -681,8 +681,11 @@ void TransitGraph::compareAlgorithmsByNames(
     int dfsMaxDurationSeconds,
     int dfsMaxVisitedStates
 ) const {
-    const std::vector<int> startCandidates = findStopsByName(startStopName);
-    const std::vector<int> targetCandidates = findStopsByName(targetStopName);
+    // const std::vector<int> startCandidates = findStopsByName(startStopName);
+    // const std::vector<int> targetCandidates = findStopsByName(targetStopName);
+
+    const std::vector<int> startCandidates = findStopsByExactName(startStopName);
+    const std::vector<int> targetCandidates = findStopsByExactName(targetStopName);
 
     if (startCandidates.empty()) {
         throw std::runtime_error(

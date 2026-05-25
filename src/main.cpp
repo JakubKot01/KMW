@@ -1,5 +1,6 @@
 #ifdef _WIN32
 #include <windows.h>
+#include <shellapi.h>
 #endif
 
 #include "TransitGraph.hpp"
@@ -11,6 +12,63 @@
 #include <string>
 
 namespace {
+#ifdef _WIN32
+    std::string wideToUtf8(const wchar_t* value) {
+        if (value == nullptr) {
+            return {};
+        }
+
+        const int size = WideCharToMultiByte(
+            CP_UTF8,
+            0,
+            value,
+            -1,
+            nullptr,
+            0,
+            nullptr,
+            nullptr
+        );
+
+        if (size <= 0) {
+            return {};
+        }
+
+        std::string result(static_cast<size_t>(size - 1), '\0');
+
+        WideCharToMultiByte(
+            CP_UTF8,
+            0,
+            value,
+            -1,
+            result.data(),
+            size,
+            nullptr,
+            nullptr
+        );
+
+        return result;
+    }
+
+    std::vector<std::string> getUtf8CommandLineArguments() {
+        int wideArgc = 0;
+        LPWSTR* wideArgv = CommandLineToArgvW(GetCommandLineW(), &wideArgc);
+
+        if (wideArgv == nullptr) {
+            throw std::runtime_error("Nie udało się odczytać argumentów programu jako Unicode.");
+        }
+
+        std::vector<std::string> arguments;
+        arguments.reserve(static_cast<size_t>(wideArgc));
+
+        for (int i = 0; i < wideArgc; ++i) {
+            arguments.push_back(wideToUtf8(wideArgv[i]));
+        }
+
+        LocalFree(wideArgv);
+        return arguments;
+    }
+#endif
+
     struct ProgramOptions {
         std::string jsonPath;
         bool printStats = true;
@@ -64,13 +122,7 @@ namespace {
             << "  --walk-distance M               Dodaj przejścia piesze do M metrów. Domyślnie 0, czyli wyłączone.\n"
             << "  --walk-speed MPS                Prędkość pieszego w m/s. Domyślnie 1.25.\n"
             << "  --walk-penalty SEC              Stały narzut na przejście piesze w sekundach. Domyślnie 10.\n"
-            << "  --help                          Pokaż pomoc.\n\n"
-            << "Przykłady:\n"
-            << "  " << executableName << " graph.json --find \"Galeria\"\n"
-            << "  " << executableName << " graph.json --compare 123 456 08:00\n"
-            << "  " << executableName << " graph.json --compare-names \"Dworzec Glowny\" \"Galeria Dominikanska\" 08:00 --walk-distance 150\n"
-            << "  " << executableName << " graph.json --compare 123 456 08:00 --dfs-depth 10 --dfs-duration-min 180\n"
-            << "  " << executableName << " graph.json --dot sample.dot --dot-stops 30 --dot-edges 3\n";
+            << "  --help                          Pokaż pomoc.\n\n";
     }
 
     int readIntArgument(int& index, int argc, char* argv[], const std::string& optionName) {
@@ -202,11 +254,24 @@ namespace {
 }
 
 int main(int argc, char* argv[]) {
-    #ifdef _WIN32
-        SetConsoleOutputCP(CP_UTF8);
-        SetConsoleCP(CP_UTF8);
-    #endif
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+#endif
     try {
+#ifdef _WIN32
+        std::vector<std::string> utf8Arguments = getUtf8CommandLineArguments();
+        std::vector<char*> utf8Argv;
+        utf8Argv.reserve(utf8Arguments.size());
+
+        for (std::string& argument : utf8Arguments) {
+            utf8Argv.push_back(argument.data());
+        }
+
+        argc = static_cast<int>(utf8Argv.size());
+        argv = utf8Argv.data();
+#endif
+
         const ProgramOptions options = parseArguments(argc, argv);
 
         TransitGraph graph = TransitGraph::loadFromJson(options.jsonPath);
