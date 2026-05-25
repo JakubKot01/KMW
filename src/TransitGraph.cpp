@@ -14,6 +14,7 @@
 #include <unordered_set>
 #include <utility>
 #include <cctype>
+#include <cmath>
 
 #include <nlohmann/json.hpp>
 
@@ -115,6 +116,30 @@ namespace {
         }
         return item.at(key).get<int>();
     }
+
+    double degreesToRadians(double degrees) {
+        constexpr double pi = 3.14159265358979323846;
+        return degrees * pi / 180.0;
+    }
+
+    double haversineDistanceMeters(double lat1, double lon1, double lat2, double lon2) {
+        constexpr double earthRadiusMeters = 6371000.0;
+
+        const double lat1Rad = degreesToRadians(lat1);
+        const double lat2Rad = degreesToRadians(lat2);
+        const double deltaLat = degreesToRadians(lat2 - lat1);
+        const double deltaLon = degreesToRadians(lon2 - lon1);
+
+        const double sinHalfLat = std::sin(deltaLat / 2.0);
+        const double sinHalfLon = std::sin(deltaLon / 2.0);
+
+        const double a =
+            sinHalfLat * sinHalfLat +
+            std::cos(lat1Rad) * std::cos(lat2Rad) * sinHalfLon * sinHalfLon;
+
+        const double c = 2.0 * std::atan2(std::sqrt(a), std::sqrt(1.0 - a));
+        return earthRadiusMeters * c;
+    }
 }
 
 TransitGraph TransitGraph::loadFromJson(const std::string& path) {
@@ -212,6 +237,9 @@ void TransitGraph::buildAdjacency() {
             const Connection& a = connections[left];
             const Connection& b = connections[right];
 
+            if (a.isWalking() != b.isWalking()) {
+                return a.isWalking() && !b.isWalking();
+            }
             if (a.departure != b.departure) {
                 return a.departure < b.departure;
             }
@@ -221,6 +249,64 @@ void TransitGraph::buildAdjacency() {
             return a.to < b.to;
         });
     }
+}
+
+int TransitGraph::addWalkingConnections(
+    double maxWalkingDistanceMeters,
+    double walkingSpeedMetersPerSecond,
+    int walkingPenaltySeconds
+) {
+    if (maxWalkingDistanceMeters <= 0.0) {
+        return 0;
+    }
+    if (walkingSpeedMetersPerSecond <= 0.0) {
+        throw std::runtime_error("Prędkość pieszego musi być większa od zera.");
+    }
+
+    int addedConnections = 0;
+    const int stopCount = static_cast<int>(stops.size());
+
+    for (int i = 0; i < stopCount; ++i) {
+        for (int j = i + 1; j < stopCount; ++j) {
+            const double distance = haversineDistanceMeters(
+                stops[i].lat,
+                stops[i].lon,
+                stops[j].lat,
+                stops[j].lon
+            );
+
+            if (distance > maxWalkingDistanceMeters) {
+                continue;
+            }
+
+            const int walkingTime =
+                static_cast<int>(std::ceil(distance / walkingSpeedMetersPerSecond)) + walkingPenaltySeconds;
+
+            Connection forward;
+            forward.from = i;
+            forward.to = j;
+            forward.route = -1;
+            forward.trip = -1;
+            forward.departure = -1;
+            forward.arrival = -1;
+            forward.travelTime = std::max(1, walkingTime);
+            forward.fromSequence = -1;
+            forward.toSequence = -1;
+            forward.type = ConnectionType::Walk;
+            forward.distanceMeters = distance;
+            connections.push_back(forward);
+            ++addedConnections;
+
+            Connection backward = forward;
+            backward.from = j;
+            backward.to = i;
+            connections.push_back(backward);
+            ++addedConnections;
+        }
+    }
+
+    buildAdjacency();
+    return addedConnections;
 }
 
 const std::vector<Stop>& TransitGraph::getStops() const {
@@ -278,14 +364,20 @@ std::vector<int> TransitGraph::findStopsByExactName(const std::string& name) con
     return result;
 }
 
-// Algorytmy wyszukiwania zostały przeniesione do osobnych plików:
-//   src/algorithms/DijkstraSearch.cpp
-//   src/algorithms/DfsSearch.cpp
-
 void TransitGraph::printStats() const {
     int stopsWithOutgoing = 0;
     int maxOutgoing = 0;
     int totalOutgoing = 0;
+    int transitConnections = 0;
+    int walkingConnections = 0;
+
+    for (const Connection& connection : connections) {
+        if (connection.isWalking()) {
+            ++walkingConnections;
+        } else {
+            ++transitConnections;
+        }
+    }
 
     for (const auto& outgoing : adjacency) {
         if (!outgoing.empty()) {
@@ -300,6 +392,8 @@ void TransitGraph::printStats() const {
     std::cout << "Trasy / linie:           " << routes.size() << '\n';
     std::cout << "Kursy / trips:           " << trips.size() << '\n';
     std::cout << "Krawędzie / connections: " << connections.size() << '\n';
+    std::cout << "  - komunikacja:         " << transitConnections << '\n';
+    std::cout << "  - piesze:              " << walkingConnections << '\n';
     std::cout << "Przystanki z wyjściami:  " << stopsWithOutgoing << '\n';
     std::cout << "Śr. liczba wyjść:        "
               << (stops.empty() ? 0.0 : static_cast<double>(totalOutgoing) / static_cast<double>(stops.size()))
@@ -357,16 +451,23 @@ void TransitGraph::printGraphSample(int maxStops, int maxEdgesPerStop) const {
         for (int i = 0; i < edgeLimit; ++i) {
             const Connection& connection = connections[outgoing[i]];
             const Stop& toStop = stopAt(connection.to);
-            const Route& route = routeAt(connection.route);
-            const Trip& trip = tripAt(connection.trip);
 
-            std::cout << "  -> [" << toStop.index << "] " << toStop.name
-                      << " | linia " << routeLabel(route)
-                      << " | " << secondsToTime(connection.departure)
-                      << " -> " << secondsToTime(connection.arrival)
-                      << " | " << (connection.travelTime / 60) << " min"
-                      << " | trip=" << trip.id
-                      << '\n';
+            std::cout << "  -> [" << toStop.index << "] " << toStop.name;
+            if (connection.isWalking()) {
+                std::cout << " | pieszo"
+                          << " | dystans " << std::fixed << std::setprecision(1) << connection.distanceMeters << " m"
+                          << " | czas " << durationToText(connection.travelTime)
+                          << '\n';
+            } else {
+                const Route& route = routeAt(connection.route);
+                const Trip& trip = tripAt(connection.trip);
+                std::cout << " | linia " << routeLabel(route)
+                          << " | " << secondsToTime(connection.departure)
+                          << " -> " << secondsToTime(connection.arrival)
+                          << " | " << (connection.travelTime / 60) << " min"
+                          << " | trip=" << trip.id
+                          << '\n';
+            }
         }
 
         if (static_cast<int>(outgoing.size()) > edgeLimit) {
@@ -397,17 +498,25 @@ void TransitGraph::printStopNeighborhood(int stopIndex, int maxEdges) const {
     for (int i = 0; i < limit; ++i) {
         const Connection& connection = connections[outgoing[i]];
         const Stop& toStop = stopAt(connection.to);
-        const Route& route = routeAt(connection.route);
-        const Trip& trip = tripAt(connection.trip);
 
-        std::cout << std::setw(4) << i + 1 << ". "
-                  << secondsToTime(connection.departure)
-                  << " -> " << secondsToTime(connection.arrival)
-                  << " | linia " << routeLabel(route)
-                  << " | do [" << toStop.index << "] " << toStop.name
-                  << " | trip=" << trip.id
-                  << " | headsign=" << trip.headsign
-                  << '\n';
+        std::cout << std::setw(4) << i + 1 << ". ";
+        if (connection.isWalking()) {
+            std::cout << "pieszo"
+                      << " | czas " << durationToText(connection.travelTime)
+                      << " | dystans " << std::fixed << std::setprecision(1) << connection.distanceMeters << " m"
+                      << " | do [" << toStop.index << "] " << toStop.name
+                      << '\n';
+        } else {
+            const Route& route = routeAt(connection.route);
+            const Trip& trip = tripAt(connection.trip);
+            std::cout << secondsToTime(connection.departure)
+                      << " -> " << secondsToTime(connection.arrival)
+                      << " | linia " << routeLabel(route)
+                      << " | do [" << toStop.index << "] " << toStop.name
+                      << " | trip=" << trip.id
+                      << " | headsign=" << trip.headsign
+                      << '\n';
+        }
     }
 
     if (static_cast<int>(outgoing.size()) > limit) {
@@ -463,16 +572,27 @@ void TransitGraph::printSearchResult(const SearchResult& result, bool printPath)
         const Connection& connection = connections[connectionIndex];
         const Stop& fromStop = stopAt(connection.from);
         const Stop& toStop = stopAt(connection.to);
+
+        std::cout << std::setw(3) << i + 1 << ". "
+                  << "[" << fromStop.index << "] " << fromStop.name
+                  << " -> [" << toStop.index << "] " << toStop.name;
+
+        if (connection.isWalking()) {
+            std::cout << " | pieszo"
+                      << " | czas " << durationToText(connection.travelTime)
+                      << " | dystans " << std::fixed << std::setprecision(1) << connection.distanceMeters << " m"
+                      << '\n';
+            currentTime += connection.travelTime;
+            continue;
+        }
+
         const Route& route = routeAt(connection.route);
         const Trip& trip = tripAt(connection.trip);
 
         const int waitTime = std::max(0, connection.departure - currentTime);
         const int rideTime = std::max(0, connection.arrival - connection.departure);
 
-        std::cout << std::setw(3) << i + 1 << ". "
-                  << "[" << fromStop.index << "] " << fromStop.name
-                  << " -> [" << toStop.index << "] " << toStop.name
-                  << " | linia " << routeLabel(route)
+        std::cout << " | linia " << routeLabel(route)
                   << " | " << secondsToTime(connection.departure)
                   << "-" << secondsToTime(connection.arrival)
                   << " | jazda " << durationToText(rideTime);
@@ -483,7 +603,7 @@ void TransitGraph::printSearchResult(const SearchResult& result, bool printPath)
 
         if (i > 0) {
             const Connection& previous = connections[result.pathConnections[i - 1]];
-            if (previous.trip != connection.trip) {
+            if (!previous.isWalking() && previous.trip != connection.trip) {
                 std::cout << " | PRZESIADKA";
             }
         }
@@ -561,19 +681,19 @@ void TransitGraph::compareAlgorithmsByNames(
     int dfsMaxDurationSeconds,
     int dfsMaxVisitedStates
 ) const {
-    const std::vector<int> startCandidates = findStopsByExactName(startStopName);
-    const std::vector<int> targetCandidates = findStopsByExactName(targetStopName);
+    const std::vector<int> startCandidates = findStopsByName(startStopName);
+    const std::vector<int> targetCandidates = findStopsByName(targetStopName);
 
     if (startCandidates.empty()) {
         throw std::runtime_error(
-            "Nie znaleziono przystanków o dokładnej nazwie startowej: \"" + startStopName + "\". "
+            "Nie znaleziono przystanków pasujących do nazwy startowej: \"" + startStopName + "\". "
             "Użyj --find, żeby sprawdzić dostępne nazwy."
         );
     }
 
     if (targetCandidates.empty()) {
         throw std::runtime_error(
-            "Nie znaleziono przystanków o dokładnej nazwie docelowej: \"" + targetStopName + "\". "
+            "Nie znaleziono przystanków pasujących do nazwy docelowej: \"" + targetStopName + "\". "
             "Użyj --find, żeby sprawdzić dostępne nazwy."
         );
     }
@@ -609,7 +729,7 @@ void TransitGraph::compareAlgorithmsByNames(
         }
     };
 
-    std::cout << "=== Porównanie metod po nazwach przystanków ===\n";
+    std::cout << "=== Porównanie metod po nazwach / fragmentach nazw przystanków ===\n";
     std::cout << "Start: \"" << startStopName << "\" -> Cel: \"" << targetStopName << "\""
               << " | godzina startu: " << secondsToTime(startTimeSeconds) << "\n\n";
 
@@ -700,14 +820,22 @@ void TransitGraph::exportDot(const std::string& path, int maxStops, int maxEdges
 
         for (int i = 0; i < edgeLimit; ++i) {
             const Connection& connection = connections[outgoing[i]];
-            const Route& route = routeAt(connection.route);
 
             file << "  s" << connection.from
                  << " -> s" << connection.to
-                 << " [label=\"" << escapeDot(routeLabel(route))
-                 << " " << secondsToTime(connection.departure)
-                 << "-" << secondsToTime(connection.arrival)
-                 << "\"];\n";
+                 << " [label=\"";
+
+            if (connection.isWalking()) {
+                file << "pieszo " << static_cast<int>(std::round(connection.distanceMeters)) << "m / "
+                     << durationToText(connection.travelTime);
+            } else {
+                const Route& route = routeAt(connection.route);
+                file << escapeDot(routeLabel(route))
+                     << " " << secondsToTime(connection.departure)
+                     << "-" << secondsToTime(connection.arrival);
+            }
+
+            file << "\"];\n";
             ++edgeCount;
         }
     }
@@ -787,19 +915,19 @@ std::string TransitGraph::routeLabel(const Route& route) {
 }
 
 int TransitGraph::countTransfers(const std::vector<int>& pathConnections, const std::vector<Connection>& connections) {
-    if (pathConnections.size() <= 1) {
-        return 0;
-    }
-
     int transfers = 0;
-    int previousTrip = connections[pathConnections.front()].trip;
+    int previousTransitTrip = -1;
 
-    for (std::size_t i = 1; i < pathConnections.size(); ++i) {
-        const int currentTrip = connections[pathConnections[i]].trip;
-        if (currentTrip != previousTrip) {
+    for (int connectionIndex : pathConnections) {
+        const Connection& connection = connections[connectionIndex];
+        if (connection.isWalking()) {
+            continue;
+        }
+
+        if (previousTransitTrip != -1 && connection.trip != previousTransitTrip) {
             ++transfers;
         }
-        previousTrip = currentTrip;
+        previousTransitTrip = connection.trip;
     }
 
     return transfers;

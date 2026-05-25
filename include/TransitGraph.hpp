@@ -36,6 +36,11 @@ struct Trip {
     std::string shapeId;
 };
 
+enum class ConnectionType {
+    Transit,
+    Walk
+};
+
 struct Connection {
     int from = -1;
     int to = -1;
@@ -46,6 +51,12 @@ struct Connection {
     int travelTime = 0;
     int fromSequence = -1;
     int toSequence = -1;
+    ConnectionType type = ConnectionType::Transit;
+    double distanceMeters = 0.0;
+
+    bool isWalking() const {
+        return type == ConnectionType::Walk;
+    }
 };
 
 struct SearchResult {
@@ -74,6 +85,11 @@ public:
     static TransitGraph loadFromJson(const std::string& path);
 
     void buildAdjacency();
+    int addWalkingConnections(
+        double maxWalkingDistanceMeters,
+        double walkingSpeedMetersPerSecond,
+        int walkingPenaltySeconds
+    );
 
     const std::vector<Stop>& getStops() const;
     const std::vector<Route>& getRoutes() const;

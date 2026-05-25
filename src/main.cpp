@@ -1,6 +1,11 @@
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include "TransitGraph.hpp"
 
 #include <cstdlib>
+#include <iomanip>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -26,9 +31,13 @@ namespace {
         bool runCompareByNames = false;
         std::string compareStartName;
         std::string compareTargetName;
-        int dfsMaxDepth = 8;
+        int dfsMaxDepth = 15;
         int dfsMaxDurationSeconds = 4 * 3600;
         int dfsMaxVisitedStates = 250000;
+
+        double walkingDistanceMeters = 0.0;
+        double walkingSpeedMetersPerSecond = 1.25;
+        int walkingPenaltySeconds = 10;
     };
 
     void printUsage(const char* executableName) {
@@ -40,22 +49,26 @@ namespace {
             << "  --print                         Wypisz próbkę grafu w konsoli.\n"
             << "  --limit-stops N                 Limit przystanków przy --print. Domyślnie 10.\n"
             << "  --limit-edges N                 Limit krawędzi na przystanek przy --print. Domyślnie 8.\n"
-            << "  --find \"tekst\"                 Znajdź przystanki po fragmencie nazwy / id / kodu.\n"
+            << "  --find \"tekst\"                Znajdź przystanki po fragmencie nazwy / id / kodu.\n"
             << "  --neighborhood INDEX            Wypisz połączenia wychodzące z jednego przystanku.\n"
             << "  --dot output.dot                Eksportuj próbkę grafu do Graphviz DOT.\n"
             << "  --dot-stops N                   Limit przystanków w DOT. Domyślnie 50.\n"
             << "  --dot-edges N                   Limit krawędzi na przystanek w DOT. Domyślnie 4.\n\n"
             << "Porównanie algorytmów:\n"
             << "  --compare START TARGET HH:MM    Porównaj DFS ograniczony i Dijkstrę czasową dla indeksów przystanków.\n"
-            << "  --compare-names START CEL HH:MM Porównaj algorytmy dla wszystkich przystanków o dokładnych nazwach.\n"
-            << "  --dfs-depth N                   Maksymalna liczba krawędzi w ścieżce DFS. Domyślnie 8.\n"
+            << "  --compare-names START CEL HH:MM Porównaj algorytmy dla wszystkich przystanków pasujących do nazwy / fragmentu nazwy.\n"
+            << "  --dfs-depth N                   Maksymalna liczba krawędzi w ścieżce DFS. Domyślnie 15.\n"
             << "  --dfs-duration-min N            Maksymalny czas podróży dla DFS w minutach. Domyślnie 240.\n"
             << "  --dfs-states N                  Maksymalna liczba odwiedzonych stanów DFS. Domyślnie 250000.\n"
+            << "\nPrzejścia piesze między bliskimi przystankami:\n"
+            << "  --walk-distance M               Dodaj przejścia piesze do M metrów. Domyślnie 0, czyli wyłączone.\n"
+            << "  --walk-speed MPS                Prędkość pieszego w m/s. Domyślnie 1.25.\n"
+            << "  --walk-penalty SEC              Stały narzut na przejście piesze w sekundach. Domyślnie 10.\n"
             << "  --help                          Pokaż pomoc.\n\n"
             << "Przykłady:\n"
             << "  " << executableName << " graph.json --find \"Galeria\"\n"
             << "  " << executableName << " graph.json --compare 123 456 08:00\n"
-            << "  " << executableName << " graph.json --compare-names \"Dworzec Główny\" \"Galeria Dominikańska\" 08:00\n"
+            << "  " << executableName << " graph.json --compare-names \"Dworzec Glowny\" \"Galeria Dominikanska\" 08:00 --walk-distance 150\n"
             << "  " << executableName << " graph.json --compare 123 456 08:00 --dfs-depth 10 --dfs-duration-min 180\n"
             << "  " << executableName << " graph.json --dot sample.dot --dot-stops 30 --dot-edges 3\n";
     }
@@ -74,6 +87,14 @@ namespace {
         }
         ++index;
         return argv[index];
+    }
+
+    double readDoubleArgument(int& index, int argc, char* argv[], const std::string& optionName) {
+        if (index + 1 >= argc) {
+            throw std::runtime_error("Opcja " + optionName + " wymaga wartości liczbowej.");
+        }
+        ++index;
+        return std::stod(argv[index]);
     }
 
     int parseTimeToSeconds(const std::string& value) {
@@ -157,6 +178,12 @@ namespace {
                 options.dfsMaxDurationSeconds = readIntArgument(i, argc, argv, argument) * 60;
             } else if (argument == "--dfs-states") {
                 options.dfsMaxVisitedStates = readIntArgument(i, argc, argv, argument);
+            } else if (argument == "--walk-distance") {
+                options.walkingDistanceMeters = readDoubleArgument(i, argc, argv, argument);
+            } else if (argument == "--walk-speed") {
+                options.walkingSpeedMetersPerSecond = readDoubleArgument(i, argc, argv, argument);
+            } else if (argument == "--walk-penalty") {
+                options.walkingPenaltySeconds = readIntArgument(i, argc, argv, argument);
             } else if (!argument.empty() && argument[0] == '-') {
                 throw std::runtime_error("Nieznana opcja: " + argument);
             } else if (options.jsonPath.empty()) {
@@ -175,10 +202,27 @@ namespace {
 }
 
 int main(int argc, char* argv[]) {
+    #ifdef _WIN32
+        SetConsoleOutputCP(CP_UTF8);
+        SetConsoleCP(CP_UTF8);
+    #endif
     try {
         const ProgramOptions options = parseArguments(argc, argv);
 
         TransitGraph graph = TransitGraph::loadFromJson(options.jsonPath);
+
+        if (options.walkingDistanceMeters > 0.0) {
+            const int addedWalkingConnections = graph.addWalkingConnections(
+                options.walkingDistanceMeters,
+                options.walkingSpeedMetersPerSecond,
+                options.walkingPenaltySeconds
+            );
+
+            std::cout << "Dodano przejścia piesze: " << addedWalkingConnections
+                      << " | max dystans=" << std::fixed << std::setprecision(1) << options.walkingDistanceMeters << " m"
+                      << " | prędkość=" << options.walkingSpeedMetersPerSecond << " m/s"
+                      << " | narzut=" << options.walkingPenaltySeconds << " s\n\n";
+        }
 
         if (options.printStats) {
             graph.printStats();

@@ -90,25 +90,25 @@ SearchResult TransitGraph::findEarliestArrivalDijkstra(
 
         const auto& outgoing = adjacency[currentStop];
 
-        const auto firstUsable = std::lower_bound(
-            outgoing.begin(),
-            outgoing.end(),
-            currentTime,
-            [this](int connectionIndex, int time) {
-                return connections[connectionIndex].departure < time;
-            }
-        );
-
-        for (auto iterator = firstUsable; iterator != outgoing.end(); ++iterator) {
-            const int connectionIndex = *iterator;
+        for (int connectionIndex : outgoing) {
             const Connection& connection = connections[connectionIndex];
             ++result.consideredEdges;
 
-            if (connection.arrival < earliestArrival[connection.to]) {
-                earliestArrival[connection.to] = connection.arrival;
+            int newArrivalTime = -1;
+            if (connection.isWalking()) {
+                newArrivalTime = currentTime + connection.travelTime;
+            } else {
+                if (connection.departure < currentTime) {
+                    continue;
+                }
+                newArrivalTime = connection.arrival;
+            }
+
+            if (newArrivalTime < earliestArrival[connection.to]) {
+                earliestArrival[connection.to] = newArrivalTime;
                 previousConnection[connection.to] = connectionIndex;
                 sourceForStop[connection.to] = sourceForStop[currentStop];
-                queue.push({connection.arrival, connection.to});
+                queue.push({newArrivalTime, connection.to});
             }
         }
     }
