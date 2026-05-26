@@ -79,43 +79,116 @@ SearchResult TransitGraph::findEarliestArrivalDfs(
     int currentStartVisitedStates = 0;
     bool currentStartStoppedByLimit = false;
 
-    const int infinity = std::numeric_limits<int>::max() / 4;
-    std::vector<std::vector<int>> bestTimeByDepth(
-        maxDepth + 1,
-        std::vector<int>(stops.size(), infinity)
-    );
+    struct DfsLabel {
+        int arrivalTime = 0;
+        int transfers = 0;
+        int lastTrip = -1;
+        int depth = 0;
+        bool active = true;
+    };
 
-    std::function<void(int, int, int)> dfs = [&](int currentStop, int currentTime, int depth) {
+    std::vector<std::vector<DfsLabel>> labelsByStop(stops.size());
+
+    auto dominates = [](const DfsLabel& existing, const DfsLabel& candidate) {
+        if (!existing.active) {
+            return false;
+        }
+
+        // A state reached using more edges is not necessarily better, even if it is earlier,
+        // because it has less remaining depth available. Therefore, we only let a state
+        // dominate another one when it is no deeper, no later and no worse in transfers.
+        if (existing.depth > candidate.depth) {
+            return false;
+        }
+
+        if (existing.arrivalTime > candidate.arrivalTime) {
+            return false;
+        }
+
+        if (existing.transfers < candidate.transfers) {
+            return true;
+        }
+
+        // If the transfer count is identical, the last used trip matters. Continuing with
+        // the same trip may avoid a transfer on the next transit edge, so different lastTrip
+        // values must usually be kept as separate labels.
+        if (existing.transfers == candidate.transfers
+            && (existing.lastTrip == candidate.lastTrip || existing.lastTrip == -1)) {
+            return true;
+        }
+
+        return false;
+    };
+
+    auto registerLabel = [&](int stop, int arrivalTime, int transfers, int lastTrip, int depth) {
+        DfsLabel candidate;
+        candidate.arrivalTime = arrivalTime;
+        candidate.transfers = transfers;
+        candidate.lastTrip = lastTrip;
+        candidate.depth = depth;
+
+        for (const DfsLabel& existing : labelsByStop[stop]) {
+            if (dominates(existing, candidate)) {
+                return false;
+            }
+        }
+
+        for (DfsLabel& existing : labelsByStop[stop]) {
+            if (dominates(candidate, existing)) {
+                existing.active = false;
+            }
+        }
+
+        labelsByStop[stop].erase(
+            std::remove_if(
+                labelsByStop[stop].begin(),
+                labelsByStop[stop].end(),
+                [](const DfsLabel& label) { return !label.active; }
+            ),
+            labelsByStop[stop].end()
+        );
+
+        labelsByStop[stop].push_back(candidate);
+        return true;
+    };
+
+    std::function<void(int, int, int, int, int)> dfs = [&](
+        int currentStop,
+        int currentTime,
+        int depth,
+        int currentTransfers,
+        int lastTrip
+    ) {
         if (currentStartStoppedByLimit) {
             return;
         }
 
-        if (currentStartVisitedStates >= maxVisitedStates) {
+        if (depth > maxDepth) {
+            return;
+        }
+
+        if (currentTime > maxArrivalTime) {
+            return;
+        }
+
+        if (bestFound && currentTime > bestArrival) {
+            return;
+        }
+
+        if (!registerLabel(currentStop, currentTime, currentTransfers, lastTrip, depth)) {
+            return;
+        }
+
+        if (maxVisitedStates > 0 && currentStartVisitedStates >= maxVisitedStates) {
             currentStartStoppedByLimit = true;
             result.stoppedByLimit = true;
             return;
         }
 
-        /*
-            State domination:
-            If a particular stop was already reached at the same or earlier time at the same depth,
-            then current state cannot lead to a better solution.
-            Arriving later to the same stop almost never can be beneficial,
-            because you can always wait at that stop for the same connections as with earlier arrival.
-            Note: We only check the current depth, not all previous depths, because in a time-dependent
-            graph arriving later can sometimes provide access to different connections.
-        */
-        if (bestTimeByDepth[depth][currentStop] <= currentTime) {
-            return;
-        }
-        bestTimeByDepth[depth][currentStop] = currentTime;
-
         ++currentStartVisitedStates;
         ++result.visitedStates;
 
         if (isTarget[currentStop]) {
-            const int currentTransfers = countTransfers(currentPath, connections);
-
             if (!bestFound || currentTime < bestArrival
                 || (currentTime == bestArrival && currentTransfers < bestTransfers)) {
                 bestFound = true;
@@ -133,57 +206,51 @@ SearchResult TransitGraph::findEarliestArrivalDfs(
             return;
         }
 
-        // Only prune based on bestArrival if we've found a solution yet.
-        // Always prune if we exceed max allowed journey time.
-        if ((bestFound && currentTime > bestArrival) || currentTime > maxArrivalTime) {
-            return;
-        }
-
         const auto& outgoing = adjacency[currentStop];
 
         for (int connectionIndex : outgoing) {
             if (currentStartStoppedByLimit) {
                 return;
             }
-        
-            if (currentStartVisitedStates >= maxVisitedStates) {
-                currentStartStoppedByLimit = true;
-                result.stoppedByLimit = true;
-                return;
-            }
-        
+
             const Connection& connection = connections[connectionIndex];
             ++result.consideredEdges;
 
             int nextTime = -1;
+            int nextTransfers = currentTransfers;
+            int nextLastTrip = lastTrip;
+
             if (connection.isWalking()) {
                 nextTime = currentTime + connection.travelTime;
             } else {
                 if (connection.departure < currentTime) {
                     continue;
                 }
+
                 nextTime = connection.arrival;
+
+                if (lastTrip != -1 && lastTrip != connection.trip) {
+                    ++nextTransfers;
+                }
+
+                nextLastTrip = connection.trip;
             }
 
             if (nextTime > maxArrivalTime) {
                 continue;
             }
 
-            // Only prune edges if we've found a better solution
             if (bestFound && nextTime > bestArrival) {
                 continue;
             }
 
-            // A -> B -> A -> B cycle prevention
             if (stopInCurrentPath[connection.to]) {
                 continue;
             }
 
             currentPath.push_back(connectionIndex);
             stopInCurrentPath[connection.to] = true;
-
-            dfs(connection.to, nextTime, depth + 1);
-
+            dfs(connection.to, nextTime, depth + 1, nextTransfers, nextLastTrip);
             stopInCurrentPath[connection.to] = false;
             currentPath.pop_back();
         }
@@ -193,14 +260,15 @@ SearchResult TransitGraph::findEarliestArrivalDfs(
         currentStartStop = startStop;
         currentStartVisitedStates = 0;
         currentStartStoppedByLimit = false;
-        for (auto& row : bestTimeByDepth) {
-            std::fill(row.begin(), row.end(), infinity);
-        }
         currentPath.clear();
         std::fill(stopInCurrentPath.begin(), stopInCurrentPath.end(), false);
         stopInCurrentPath[startStop] = true;
-        
-        dfs(startStop, startTimeSeconds, 0);
+
+        for (auto& labels : labelsByStop) {
+            labels.clear();
+        }
+
+        dfs(startStop, startTimeSeconds, 0, 0, -1);
     }
 
     if (bestFound) {

@@ -127,7 +127,7 @@ namespace {
             << "  --compare-names START CEL HH:MM Porównaj algorytmy dla przystanków o dokładnie podanej nazwie.\n"
             << "  --dfs-depth N                   Maksymalna liczba krawędzi w ścieżce DFS. Domyślnie 20.\n"
             << "  --dfs-duration-min N            Maksymalny czas podróży dla DFS w minutach. Domyślnie 240.\n"
-            << "  --dfs-states N                  Maksymalna liczba odwiedzonych stanów DFS. Domyślnie 250000.\n"
+            << "  --dfs-states N                  Maksymalna liczba odwiedzonych stanów DFS. Domyślnie 250000; 0 oznacza brak limitu stanów.\n"
             << "\nPrzejścia piesze między bliskimi przystankami:\n"
             << "  --walk-distance M               Dodaj przejścia piesze do M metrów. Domyślnie 0, czyli wyłączone.\n"
             << "  --walk-speed MPS                Prędkość pieszego w m/s. Domyślnie 1.25.\n"
