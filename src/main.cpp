@@ -13,6 +13,15 @@
 #include <vector>
 
 namespace {
+    // Configuration constants for walking connections between stops
+    constexpr double DEFAULT_WALKING_SPEED_M_PER_S = 1.25;  // Average pedestrian speed
+    constexpr int DEFAULT_WALKING_PENALTY_SECONDS = 10;      // Penalty for using walking connection
+    
+    // Default DFS search constraints
+    constexpr int DEFAULT_DFS_MAX_DEPTH = 20;                // Maximum hops in a path
+    constexpr int DEFAULT_DFS_MAX_DURATION_SECONDS = 4 * 3600; // 4 hours max journey time
+    constexpr int DEFAULT_DFS_MAX_VISITED_STATES = 250000;   // State exploration limit
+
 #ifdef _WIN32
     std::string wideToUtf8(const wchar_t* value) {
         if (value == nullptr) {
@@ -90,13 +99,13 @@ namespace {
         bool runCompareByNames = false;
         std::string compareStartName;
         std::string compareTargetName;
-        int dfsMaxDepth = 20;
-        int dfsMaxDurationSeconds = 4 * 3600;
-        int dfsMaxVisitedStates = 250000;
+        int dfsMaxDepth = DEFAULT_DFS_MAX_DEPTH;
+        int dfsMaxDurationSeconds = DEFAULT_DFS_MAX_DURATION_SECONDS;
+        int dfsMaxVisitedStates = DEFAULT_DFS_MAX_VISITED_STATES;
 
         double walkingDistanceMeters = 0.0;
-        double walkingSpeedMetersPerSecond = 1.25;
-        int walkingPenaltySeconds = 10;
+        double walkingSpeedMetersPerSecond = DEFAULT_WALKING_SPEED_M_PER_S;
+        int walkingPenaltySeconds = DEFAULT_WALKING_PENALTY_SECONDS;
     };
 
     void printUsage(const char* executableName) {

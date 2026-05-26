@@ -65,8 +65,9 @@ SearchResult TransitGraph::findEarliestArrivalDfs(
     }
 
     const int maxArrivalTime = startTimeSeconds + maxDurationSeconds;
-    int bestArrival = std::numeric_limits<int>::max() / 4;
-    int bestTransfers = std::numeric_limits<int>::max() / 4;
+    bool bestFound = false;
+    int bestArrival = -1;
+    int bestTransfers = -1;
     int bestStartStop = startStops.front();
     int bestTargetStop = targetStops.front();
     int currentStartStop = -1;
@@ -96,16 +97,16 @@ SearchResult TransitGraph::findEarliestArrivalDfs(
         }
 
         /*
-            State domination: 
-            If particular stop was already reached at the same or earlier time and with the same or smaller depth, 
-            then current state cannot lead to a better solution. 
-            Arriving later to the same stop almost never can be beneficial, 
+            State domination:
+            If a particular stop was already reached at the same or earlier time at the same depth,
+            then current state cannot lead to a better solution.
+            Arriving later to the same stop almost never can be beneficial,
             because you can always wait at that stop for the same connections as with earlier arrival.
+            Note: We only check the current depth, not all previous depths, because in a time-dependent
+            graph arriving later can sometimes provide access to different connections.
         */
-        for (int previousDepth = 0; previousDepth <= depth; ++previousDepth) {
-            if (bestTimeByDepth[previousDepth][currentStop] <= currentTime) {
-                return;
-            }
+        if (bestTimeByDepth[depth][currentStop] <= currentTime) {
+            return;
         }
         bestTimeByDepth[depth][currentStop] = currentTime;
 
@@ -115,8 +116,9 @@ SearchResult TransitGraph::findEarliestArrivalDfs(
         if (isTarget[currentStop]) {
             const int currentTransfers = countTransfers(currentPath, connections);
 
-            if (currentTime < bestArrival
+            if (!bestFound || currentTime < bestArrival
                 || (currentTime == bestArrival && currentTransfers < bestTransfers)) {
+                bestFound = true;
                 bestArrival = currentTime;
                 bestTransfers = currentTransfers;
                 bestPath = currentPath;
@@ -131,7 +133,9 @@ SearchResult TransitGraph::findEarliestArrivalDfs(
             return;
         }
 
-        if (currentTime > bestArrival || currentTime > maxArrivalTime) {
+        // Only prune based on bestArrival if we've found a solution yet.
+        // Always prune if we exceed max allowed journey time.
+        if ((bestFound && currentTime > bestArrival) || currentTime > maxArrivalTime) {
             return;
         }
 
@@ -165,7 +169,8 @@ SearchResult TransitGraph::findEarliestArrivalDfs(
                 continue;
             }
 
-            if (nextTime > bestArrival) {
+            // Only prune edges if we've found a better solution
+            if (bestFound && nextTime > bestArrival) {
                 continue;
             }
 
@@ -198,7 +203,7 @@ SearchResult TransitGraph::findEarliestArrivalDfs(
         dfs(startStop, startTimeSeconds, 0);
     }
 
-    if (bestArrival != std::numeric_limits<int>::max() / 4) {
+    if (bestFound) {
         result.found = true;
         result.startStop = bestStartStop;
         result.targetStop = bestTargetStop;
