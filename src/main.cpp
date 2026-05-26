@@ -10,6 +10,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
 #ifdef _WIN32
@@ -89,7 +90,7 @@ namespace {
         bool runCompareByNames = false;
         std::string compareStartName;
         std::string compareTargetName;
-        int dfsMaxDepth = 15;
+        int dfsMaxDepth = 20;
         int dfsMaxDurationSeconds = 4 * 3600;
         int dfsMaxVisitedStates = 250000;
 
@@ -114,8 +115,8 @@ namespace {
             << "  --dot-edges N                   Limit krawędzi na przystanek w DOT. Domyślnie 4.\n\n"
             << "Porównanie algorytmów:\n"
             << "  --compare START TARGET HH:MM    Porównaj DFS ograniczony i Dijkstrę czasową dla indeksów przystanków.\n"
-            << "  --compare-names START CEL HH:MM Porównaj algorytmy dla wszystkich przystanków pasujących do nazwy / fragmentu nazwy.\n"
-            << "  --dfs-depth N                   Maksymalna liczba krawędzi w ścieżce DFS. Domyślnie 15.\n"
+            << "  --compare-names START CEL HH:MM Porównaj algorytmy dla przystanków o dokładnie podanej nazwie.\n"
+            << "  --dfs-depth N                   Maksymalna liczba krawędzi w ścieżce DFS. Domyślnie 20.\n"
             << "  --dfs-duration-min N            Maksymalny czas podróży dla DFS w minutach. Domyślnie 240.\n"
             << "  --dfs-states N                  Maksymalna liczba odwiedzonych stanów DFS. Domyślnie 250000.\n"
             << "\nPrzejścia piesze między bliskimi przystankami:\n"
@@ -329,8 +330,6 @@ int main(int argc, char* argv[]) {
 
         if (!options.dotPath.empty()) {
             graph.exportDot(options.dotPath, options.dotStops, options.dotEdges);
-            std::cout << "Renderowanie przykładowe:\n"
-                      << "  dot -Tpng " << options.dotPath << " -o graph.png\n";
         }
 
         return 0;

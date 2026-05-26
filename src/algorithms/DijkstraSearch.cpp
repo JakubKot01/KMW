@@ -44,7 +44,7 @@ SearchResult TransitGraph::findEarliestArrivalDijkstra(
     const auto startedAt = Clock::now();
 
     SearchResult result;
-    result.methodName = "Dijkstra czasowa";
+    result.methodName = "Time-based Dijkstra";
     result.startStop = startStops.front();
     result.targetStop = targetStops.front();
     result.requestedStartTime = startTimeSeconds;
@@ -54,85 +54,199 @@ SearchResult TransitGraph::findEarliestArrivalDijkstra(
         isTarget[targetStop] = true;
     }
 
-    const int infinity = std::numeric_limits<int>::max() / 4;
-    std::vector<int> earliestArrival(stops.size(), infinity);
-    std::vector<int> previousConnection(stops.size(), -1);
-    std::vector<int> sourceForStop(stops.size(), -1);
+    struct Label {
+        int stop = -1;
+        int arrivalTime = 0;
+        int transfers = 0;
+        int lastTrip = -1;
+        int previousLabel = -1;
+        int previousConnection = -1;
+        int sourceStop = -1;
+        bool active = true;
+    };
 
-    using QueueItem = std::pair<int, int>; // arrival time, stop index
-    std::priority_queue<QueueItem, std::vector<QueueItem>, std::greater<QueueItem>> queue;
+    struct QueueItem {
+        int labelIndex = -1;
+    };
+
+    std::vector<Label> labels;
+    std::vector<std::vector<int>> labelsByStop(stops.size());
+
+    auto isDominatedBy = [&](const Label& existing, const Label& candidate) {
+        if (!existing.active) {
+            return false;
+        }
+
+        if (existing.arrivalTime > candidate.arrivalTime) {
+            return false;
+        }
+
+        if (existing.transfers < candidate.transfers) {
+            return true;
+        }
+
+        if (existing.transfers == candidate.transfers && existing.lastTrip == candidate.lastTrip) {
+            return true;
+        }
+
+        return false;
+    };
+
+    auto dominates = [&](const Label& candidate, const Label& existing) {
+        if (!existing.active) {
+            return false;
+        }
+
+        if (candidate.arrivalTime > existing.arrivalTime) {
+            return false;
+        }
+
+        if (candidate.transfers < existing.transfers) {
+            return true;
+        }
+
+        if (candidate.transfers == existing.transfers && candidate.lastTrip == existing.lastTrip) {
+            return true;
+        }
+
+        return false;
+    };
+
+    auto addLabel = [&](const Label& candidate) -> int {
+        for (int labelIndex : labelsByStop[candidate.stop]) {
+            if (isDominatedBy(labels[labelIndex], candidate)) {
+                return -1;
+            }
+        }
+
+        const int newIndex = static_cast<int>(labels.size());
+        labels.push_back(candidate);
+
+        for (int labelIndex : labelsByStop[candidate.stop]) {
+            if (dominates(candidate, labels[labelIndex])) {
+                labels[labelIndex].active = false;
+            }
+        }
+
+        labelsByStop[candidate.stop].push_back(newIndex);
+        return newIndex;
+    };
+
+    struct QueueItemGreater {
+        const std::vector<Label>* labels = nullptr;
+
+        bool operator()(const QueueItem& left, const QueueItem& right) const {
+            const Label& leftLabel = (*labels)[left.labelIndex];
+            const Label& rightLabel = (*labels)[right.labelIndex];
+
+            if (leftLabel.arrivalTime != rightLabel.arrivalTime) {
+                return leftLabel.arrivalTime > rightLabel.arrivalTime;
+            }
+
+            if (leftLabel.transfers != rightLabel.transfers) {
+                return leftLabel.transfers > rightLabel.transfers;
+            }
+
+            return leftLabel.stop > rightLabel.stop;
+        }
+    };
+
+    QueueItemGreater comparator;
+    comparator.labels = &labels;
+
+    std::priority_queue<QueueItem, std::vector<QueueItem>, QueueItemGreater> queue(comparator);
 
     for (int startStop : startStops) {
-        if (startTimeSeconds < earliestArrival[startStop]) {
-            earliestArrival[startStop] = startTimeSeconds;
-            previousConnection[startStop] = -1;
-            sourceForStop[startStop] = startStop;
-            queue.push({startTimeSeconds, startStop});
+        Label startLabel;
+        startLabel.stop = startStop;
+        startLabel.arrivalTime = startTimeSeconds;
+        startLabel.transfers = 0;
+        startLabel.lastTrip = -1;
+        startLabel.previousLabel = -1;
+        startLabel.previousConnection = -1;
+        startLabel.sourceStop = startStop;
+
+        const int labelIndex = addLabel(startLabel);
+        if (labelIndex != -1) {
+            queue.push({labelIndex});
         }
     }
 
-    int bestTargetStop = -1;
+    int bestTargetLabel = -1;
 
     while (!queue.empty()) {
-        const auto [currentTime, currentStop] = queue.top();
+        const QueueItem item = queue.top();
         queue.pop();
 
-        if (currentTime != earliestArrival[currentStop]) {
+        const int currentLabelIndex = item.labelIndex;
+        const Label currentLabel = labels[currentLabelIndex];
+
+        if (!labels[currentLabelIndex].active) {
             continue;
         }
 
         ++result.visitedStates;
 
-        if (isTarget[currentStop]) {
-            bestTargetStop = currentStop;
+        if (isTarget[currentLabel.stop]) {
+            bestTargetLabel = currentLabelIndex;
             break;
         }
 
-        const auto& outgoing = adjacency[currentStop];
+        const auto& outgoing = adjacency[currentLabel.stop];
 
         for (int connectionIndex : outgoing) {
             const Connection& connection = connections[connectionIndex];
             ++result.consideredEdges;
 
-            int newArrivalTime = -1;
+            Label nextLabel;
+            nextLabel.stop = connection.to;
+            nextLabel.transfers = currentLabel.transfers;
+            nextLabel.lastTrip = currentLabel.lastTrip;
+            nextLabel.previousLabel = currentLabelIndex;
+            nextLabel.previousConnection = connectionIndex;
+            nextLabel.sourceStop = currentLabel.sourceStop;
+
             if (connection.isWalking()) {
-                newArrivalTime = currentTime + connection.travelTime;
+                nextLabel.arrivalTime = currentLabel.arrivalTime + connection.travelTime;
             } else {
-                if (connection.departure < currentTime) {
+                if (connection.departure < currentLabel.arrivalTime) {
                     continue;
                 }
-                newArrivalTime = connection.arrival;
+
+                nextLabel.arrivalTime = connection.arrival;
+
+                if (currentLabel.lastTrip != -1 && currentLabel.lastTrip != connection.trip) {
+                    ++nextLabel.transfers;
+                }
+
+                nextLabel.lastTrip = connection.trip;
             }
 
-            if (newArrivalTime < earliestArrival[connection.to]) {
-                earliestArrival[connection.to] = newArrivalTime;
-                previousConnection[connection.to] = connectionIndex;
-                sourceForStop[connection.to] = sourceForStop[currentStop];
-                queue.push({newArrivalTime, connection.to});
+            const int nextLabelIndex = addLabel(nextLabel);
+            if (nextLabelIndex != -1) {
+                queue.push({nextLabelIndex});
             }
         }
     }
 
-    if (bestTargetStop != -1) {
+    if (bestTargetLabel != -1) {
+        const Label& targetLabel = labels[bestTargetLabel];
+
         result.found = true;
-        result.targetStop = bestTargetStop;
-        result.startStop = sourceForStop[bestTargetStop];
-        result.arrivalTime = earliestArrival[bestTargetStop];
+        result.targetStop = targetLabel.stop;
+        result.startStop = targetLabel.sourceStop;
+        result.arrivalTime = targetLabel.arrivalTime;
         result.totalTravelTime = result.arrivalTime - startTimeSeconds;
+        result.transfers = targetLabel.transfers;
 
-        int currentStop = bestTargetStop;
-        while (currentStop != result.startStop) {
-            const int connectionIndex = previousConnection[currentStop];
-            if (connectionIndex < 0) {
-                throw std::runtime_error("Nie można odtworzyć ścieżki Dijkstry mimo znalezionego celu.");
-            }
-
+        int currentLabelIndex = bestTargetLabel;
+        while (labels[currentLabelIndex].previousLabel != -1) {
+            const int connectionIndex = labels[currentLabelIndex].previousConnection;
             result.pathConnections.push_back(connectionIndex);
-            currentStop = connections[connectionIndex].from;
+            currentLabelIndex = labels[currentLabelIndex].previousLabel;
         }
 
         std::reverse(result.pathConnections.begin(), result.pathConnections.end());
-        result.transfers = countTransfers(result.pathConnections, connections);
     }
 
     const auto finishedAt = Clock::now();

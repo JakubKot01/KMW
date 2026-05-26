@@ -567,6 +567,8 @@ void TransitGraph::printSearchResult(const SearchResult& result, bool printPath)
     }
 
     int currentTime = result.requestedStartTime;
+    int previousTransitTrip = -1;
+    
     for (int i = 0; i < static_cast<int>(result.pathConnections.size()); ++i) {
         const int connectionIndex = result.pathConnections[i];
         const Connection& connection = connections[connectionIndex];
@@ -601,14 +603,12 @@ void TransitGraph::printSearchResult(const SearchResult& result, bool printPath)
             std::cout << " | czekanie " << durationToText(waitTime);
         }
 
-        if (i > 0) {
-            const Connection& previous = connections[result.pathConnections[i - 1]];
-            if (!previous.isWalking() && previous.trip != connection.trip) {
-                std::cout << " | PRZESIADKA";
-            }
+        if (previousTransitTrip != -1 && previousTransitTrip != connection.trip) {
+            std::cout << " | PRZESIADKA";
         }
-
+        
         std::cout << " | trip=" << trip.id << '\n';
+        previousTransitTrip = connection.trip;
         currentTime = connection.arrival;
     }
 
@@ -681,22 +681,19 @@ void TransitGraph::compareAlgorithmsByNames(
     int dfsMaxDurationSeconds,
     int dfsMaxVisitedStates
 ) const {
-    // const std::vector<int> startCandidates = findStopsByName(startStopName);
-    // const std::vector<int> targetCandidates = findStopsByName(targetStopName);
-
     const std::vector<int> startCandidates = findStopsByExactName(startStopName);
     const std::vector<int> targetCandidates = findStopsByExactName(targetStopName);
 
     if (startCandidates.empty()) {
         throw std::runtime_error(
-            "Nie znaleziono przystanków pasujących do nazwy startowej: \"" + startStopName + "\". "
+            "Nie znaleziono przystanków o dokładnej nazwie startowej: \"" + startStopName + "\". "
             "Użyj --find, żeby sprawdzić dostępne nazwy."
         );
     }
 
     if (targetCandidates.empty()) {
         throw std::runtime_error(
-            "Nie znaleziono przystanków pasujących do nazwy docelowej: \"" + targetStopName + "\". "
+            "Nie znaleziono przystanków o dokładnej nazwie docelowej: \"" + targetStopName + "\". "
             "Użyj --find, żeby sprawdzić dostępne nazwy."
         );
     }
@@ -732,7 +729,7 @@ void TransitGraph::compareAlgorithmsByNames(
         }
     };
 
-    std::cout << "=== Porównanie metod po nazwach / fragmentach nazw przystanków ===\n";
+    std::cout << "=== Porównanie metod po dokładnych nazwach przystanków ===\n";
     std::cout << "Start: \"" << startStopName << "\" -> Cel: \"" << targetStopName << "\""
               << " | godzina startu: " << secondsToTime(startTimeSeconds) << "\n\n";
 

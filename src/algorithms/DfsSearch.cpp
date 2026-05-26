@@ -52,7 +52,7 @@ SearchResult TransitGraph::findEarliestArrivalDfs(
     const auto startedAt = Clock::now();
 
     SearchResult result;
-    result.methodName = "DFS ograniczony";
+    result.methodName = "Bounded DFS";
     result.startStop = startStops.front();
     result.targetStop = targetStops.front();
     result.requestedStartTime = startTimeSeconds;
@@ -66,6 +66,7 @@ SearchResult TransitGraph::findEarliestArrivalDfs(
 
     const int maxArrivalTime = startTimeSeconds + maxDurationSeconds;
     int bestArrival = std::numeric_limits<int>::max() / 4;
+    int bestTransfers = std::numeric_limits<int>::max() / 4;
     int bestStartStop = startStops.front();
     int bestTargetStop = targetStops.front();
     int currentStartStop = -1;
@@ -74,9 +75,6 @@ SearchResult TransitGraph::findEarliestArrivalDfs(
     std::vector<int> bestPath;
     std::vector<bool> stopInCurrentPath(stops.size(), false);
 
-    // Limit stanów DFS jest liczony osobno dla każdego przystanku startowego.
-    // Dzięki temu przy wyszukiwaniu po nazwie pierwszy kandydat nie blokuje
-    // pozostałych przystanków o tej samej nazwie.
     int currentStartVisitedStates = 0;
     bool currentStartStoppedByLimit = false;
 
@@ -97,10 +95,13 @@ SearchResult TransitGraph::findEarliestArrivalDfs(
             return;
         }
 
-        // Dominacja stanu: jeżeli byliśmy już na tym samym przystanku
-        // nie później i przy użyciu nie większej liczby krawędzi, to obecny
-        // stan nie może dać lepszego wyniku. Wcześniejsze przybycie na ten sam
-        // przystanek zawsze może poczekać na te same kursy co późniejsze.
+        /*
+            State domination: 
+            If particular stop was already reached at the same or earlier time and with the same or smaller depth, 
+            then current state cannot lead to a better solution. 
+            Arriving later to the same stop almost never can be beneficial, 
+            because you can always wait at that stop for the same connections as with earlier arrival.
+        */
         for (int previousDepth = 0; previousDepth <= depth; ++previousDepth) {
             if (bestTimeByDepth[previousDepth][currentStop] <= currentTime) {
                 return;
@@ -112,12 +113,17 @@ SearchResult TransitGraph::findEarliestArrivalDfs(
         ++result.visitedStates;
 
         if (isTarget[currentStop]) {
-            if (currentTime < bestArrival) {
+            const int currentTransfers = countTransfers(currentPath, connections);
+
+            if (currentTime < bestArrival
+                || (currentTime == bestArrival && currentTransfers < bestTransfers)) {
                 bestArrival = currentTime;
+                bestTransfers = currentTransfers;
                 bestPath = currentPath;
                 bestStartStop = currentStartStop;
                 bestTargetStop = currentStop;
             }
+
             return;
         }
 
@@ -125,7 +131,7 @@ SearchResult TransitGraph::findEarliestArrivalDfs(
             return;
         }
 
-        if (currentTime >= bestArrival || currentTime > maxArrivalTime) {
+        if (currentTime > bestArrival || currentTime > maxArrivalTime) {
             return;
         }
 
@@ -159,12 +165,11 @@ SearchResult TransitGraph::findEarliestArrivalDfs(
                 continue;
             }
 
-            if (nextTime >= bestArrival) {
+            if (nextTime > bestArrival) {
                 continue;
             }
 
-            // Proste zabezpieczenie przed cyklami typu A -> B -> A -> B.
-            // Dla problemu najwcześniejszego przyjazdu takie cykle prawie nigdy nie są potrzebne.
+            // A -> B -> A -> B cycle prevention
             if (stopInCurrentPath[connection.to]) {
                 continue;
             }
@@ -200,7 +205,7 @@ SearchResult TransitGraph::findEarliestArrivalDfs(
         result.arrivalTime = bestArrival;
         result.totalTravelTime = result.arrivalTime - startTimeSeconds;
         result.pathConnections = std::move(bestPath);
-        result.transfers = countTransfers(result.pathConnections, connections);
+        result.transfers = bestTransfers;
     }
 
     const auto finishedAt = Clock::now();
